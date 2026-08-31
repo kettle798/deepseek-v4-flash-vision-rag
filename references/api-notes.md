@@ -38,7 +38,7 @@
   （本项目用 `[第N页]` 文本标签 + file 块交错，实测有效，页码不乱）。
 - openai SDK 的 `files.create()` **不接受 `expires_after`**（会 TypeError），
   文件默认永久有效；配额 25GiB / 10000 个文件，足够。
-- `files.retrieve(fid)` 可校验存在性（免费、不耗 token）——ask.py 用它做失效重传。
+- `files.retrieve(fid)` 可校验存在性（免费、不耗 token）——`read_vision` / `ingest` 用它做失效重传。
 
 ## 设计决策（为什么这样做）
 
