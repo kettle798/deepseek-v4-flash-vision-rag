@@ -187,9 +187,6 @@ def main():
     ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--workers", type=int, default=6, help="上传并发数")
     ap.add_argument("--clean", action="store_true", help="删除该 PDF 的本地缓存后退出")
-    ap.add_argument("--route", choices=("auto", "vision", "text"), default="auto",
-                    help="auto=自适应路由(默认,文本直录+图纸/乱码/扫描VLM转录); "
-                         "vision=全页视觉(旧行为); text=纯文本")
     args = ap.parse_args()
 
     pdf = args.pdf.resolve()
@@ -221,91 +218,15 @@ def main():
         except json.JSONDecodeError:
             pass
 
-    print(f"[ingest] {pdf.name}: {total} pages, indexing {n_pages}, route={args.route}, sha={sha[:16]}", flush=True)
+    print(f"[ingest] {pdf.name}: {total} pages, indexing {n_pages}, sha={sha[:16]}", flush=True)
     t0 = time.time()
 
-    client = DSClient()
-    texts = [doc[i].get_text() for i in range(n_pages)]
-
-    if args.route == "auto":
-        # ---- 自适应：pdf-inspector 路由，图纸/乱码/扫描页 VLM 转录 ----
-        import router
-        from transcribe import transcribe_pages
-        # 先全量渲染 PNG（本地零成本）。transcribe 复用缓存里的图，且视觉精排
-        # （ask.py rerank/deep_read）需要任意候选页原图——若只渲染转录页，
-        # TEXT/TABLE 候选页会缺 PNG（实测 NZME Q20 报错 p0035.png 不存在）。
-        pages_dir = cache_dir / "pages"
-        render_pages(doc, pages_dir, args.dpi)
-        labels, text_map, meta = router.classify_pdf(pdf, n_pages)
-        need_vlm = {p: lab for p, lab in labels.items()
-                    if lab in ("GARBLED", "SCAN", "GRAPHIC")}
-        if need_vlm:
-            print(f"[route] {len(need_vlm)} 页需 VLM 转录: "
-                  f"{ {lab: sum(1 for v in need_vlm.values() if v==lab) for lab in set(need_vlm.values())} }",
-                  flush=True)
-            vlm_texts = transcribe_pages(client, pdf, need_vlm, cache_dir,
-                                         batch=max(2, args.batch // 2), dpi=args.dpi,
-                                         workers=args.workers)
-            for p, t in vlm_texts.items():
-                text_map[p] = t.strip().lstrip("】")
-            missing = [p for p in need_vlm if p not in vlm_texts]
-            if missing:
-                print(f"[route] WARNING: {len(missing)} 页转录失败: {missing[:10]}", flush=True)
-
-        # 页记录（auto：文本页直录；VLM 页用转录文本；不做全页视觉索引，转录即视觉）
-        records = {}
-        for p in range(1, n_pages + 1):
-            lab = labels.get(p, "TEXT")
-            md = text_map.get(p, "") or ""
-            records[p] = {
-                "page": p,
-                "type": {"GRAPHIC": "插图", "SCAN": "其他", "GARBLED": "正文"}.get(lab, "正文"),
-                "headings": [], "keywords": [],
-                "summary": md[:150],
-                "has": {"figure": lab == "GRAPHIC", "table": lab == "TABLE",
-                        "code": False, "formula": False},
-                "source": "vlm" if lab in ("GARBLED", "SCAN", "GRAPHIC") else "text",
-                "route_label": lab,
-            }
-        ordered = [records[p] for p in range(1, n_pages + 1)]
-        index = {
-            "pdf": str(pdf), "pdf_name": pdf.name, "sha256": sha,
-            "model": client.model, "created": datetime.now().isoformat(timespec="seconds"),
-            "total_pages": total, "pages_indexed": n_pages, "partial": n_pages < total,
-            "route": "auto",
-            "pages": ordered,
-            "page_texts": [text_map.get(p, "") or texts[p - 1] for p in range(1, n_pages + 1)],
-            "outline": [],
-        }
-        save_json(index_path, index)
-        from collections import Counter
-        dist = Counter(labels.values())
-        vlm_ok = sum(1 for p in need_vlm if p in vlm_texts)
-        print(f"[done] auto index: {n_pages} 页, 路由 {dict(dist)}, "
-              f"VLM 转录成功 {vlm_ok}/{len(need_vlm)} ({time.time()-t0:.0f}s) -> {index_path}", flush=True)
-        return
-
-    if args.route == "text":
-        # ---- 纯文本（对照实验）：page_texts 用 PyMuPDF 原文，无视觉 ----
-        ordered = [{"page": p, "type": "正文", "headings": [], "keywords": [],
-                    "summary": texts[p - 1][:150],
-                    "has": {"figure": False, "table": False, "code": False, "formula": False},
-                    "source": "text"} for p in range(1, n_pages + 1)]
-        index = {
-            "pdf": str(pdf), "pdf_name": pdf.name, "sha256": sha,
-            "model": client.model, "created": datetime.now().isoformat(timespec="seconds"),
-            "total_pages": total, "pages_indexed": n_pages, "partial": n_pages < total,
-            "route": "text", "pages": ordered, "page_texts": texts, "outline": [],
-        }
-        save_json(index_path, index)
-        print(f"[done] text-only index: {n_pages} 页 ({time.time()-t0:.0f}s) -> {index_path}", flush=True)
-        return
-
-    # ---- vision 模式：全页视觉索引（旧行为，保持不变）----
     pages_dir = cache_dir / "pages"
     page_files = render_pages(doc, pages_dir, args.dpi)[:n_pages]
+    texts = [doc[i].get_text() for i in range(n_pages)]
     print(f"[render] {len(page_files)} pages -> {pages_dir} ({time.time() - t0:.0f}s)", flush=True)
 
+    client = DSClient()
     files_map = upload_all(client, page_files, cache_dir / "files.json", args.workers)
     print(f"[upload] {len(files_map)} file_ids ready ({time.time() - t0:.0f}s)", flush=True)
 

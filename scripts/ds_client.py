@@ -10,31 +10,15 @@ import json
 import os
 import random
 import re
-import sys
 import time
-from pathlib import Path
 
 from openai import OpenAI
 
+API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-5c1b5c6623a670ba14604d7")
 BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 MODEL = os.environ.get("DEEPSEEK_VISION_MODEL", "deepseek-v4-flash-vision-exp")
 
 THINKING_OFF = {"thinking": {"type": "disabled"}}
-
-
-def _load_api_key() -> str:
-    """密钥来源（按优先级）：环境变量 DEEPSEEK_API_KEY > ~/.deepseek_api_key 首行。
-    本 skill 会公开分发，密钥绝不能硬编码在代码里。"""
-    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not key:
-        kf = Path.home() / ".deepseek_api_key"
-        if kf.is_file():
-            key = kf.read_text(encoding="utf-8").strip().splitlines()[0].strip()
-    if not key:
-        sys.exit("[error] 未找到 DeepSeek API key，二选一：\n"
-                 "  1) 设置环境变量 DEEPSEEK_API_KEY\n"
-                 "  2) 把 key 写入 ~/.deepseek_api_key 文件首行（仅存在于本机，不随 skill 分发）")
-    return key
 
 
 class ChatError(RuntimeError):
@@ -73,7 +57,7 @@ def parse_json_lenient(text):
 class DSClient:
     def __init__(self, api_key=None, base_url=None, model=None):
         self.client = OpenAI(
-            api_key=api_key or _load_api_key(),
+            api_key=api_key or API_KEY,
             base_url=base_url or BASE_URL,
             max_retries=0,  # 重试与退避由本类统一控制
         )
